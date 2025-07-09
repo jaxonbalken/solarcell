@@ -3,170 +3,170 @@ import numpy as np
 import matplotlib.pyplot as plt
 import time
 import csv
-import sys
+from datetime import datetime
+import tkinter as tk
+from tkinter import filedialog
 
 # ==== CONFIGURATION ====
-V_START = 0.0          # Start voltage (V)
-V_STOP = 10.0          # Max voltage limit (V)
-V_STEP = 0.1           # Voltage step size (V)
-DWELL_TIME = 0.3       # Wait time after setting load before measuring
-ESTIMATED_CURRENT = 3  # Estimated max current (Amps)
-CSV_FILENAME = "iv_pv_data.csv"
+V_START = 0.5           # Start voltage (V)
+V_STOP = 10.0           # Max sweep voltage (V)
+V_STEP = 0.1            # Voltage step size (V)
+DWELL_TIME = 0.3        # Wait time per step (seconds)
+ESTIMATED_CURRENT = 5.0 # Estimated max current (A)
 
-MAX_CURRENT = 5.0      # Safety current limit (Amps)
-MAX_POWER = 50.0       # Safety power limit (Watts)
-MAX_SWEEP_TIME = 300   # Max sweep time in seconds
+# === SAFETY LIMITS ===
+MAX_CURRENT = 20.0       # Max current limit (A)
+MAX_POWER = 50.0        # Max power limit (W)
+MIN_RESISTANCE = 0.08   # Ohms, minimum resistance command
+MAX_RESISTANCE = 15000  # Ohms, maximum resistance command (15 kΩ)
+
+# === RESISTANCE RANGE LIMITS (from Rigol manual) ===
+LOW_RANGE_MIN = 0.08    # Ohms
+LOW_RANGE_MAX = 15.0    # Ohms
+HIGH_RANGE_MIN = 2.0    # Ohms
+HIGH_RANGE_MAX = 15000  # Ohms (15 kΩ)
+
+# === FILE NAMING ===
+timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
 print("=== Starting Rigol DL3031 IV/PV sweep script with enhanced safeguards ===")
 
 # ==== VISA SETUP ====
-rm = pyvisa.ResourceManager()
+rm = pyvisa.ResourceManager('/Library/Frameworks/VISA.framework/VISA')
 usb_instruments = [r for r in rm.list_resources() if 'USB' in r]
 
 if not usb_instruments:
     raise RuntimeError("No USB instruments found. Check connections and drivers.")
 
 resource = usb_instruments[0]
-print(f"Connecting to: {resource}")
+print(f"✅ Connecting to: {resource}")
 inst = rm.open_resource(resource)
 
 inst.timeout = 5000
 inst.write_termination = '\n'
 inst.read_termination = '\n'
 
-print("Instrument ID:", inst.query("*IDN?").strip())
-
-# ==== OPEN CIRCUIT VOLTAGE CHECK ====
-print("\nMeasuring open-circuit voltage (load off)...")
-inst.write(":INPUT OFF")
-time.sleep(1)
-voc = float(inst.query(":MEAS:VOLT?"))
-print(f"Open-circuit voltage (Voc) = {voc:.2f} V")
-
-# Adjust sweep stop voltage to slightly above Voc, but not exceed configured max
-adjusted_v_stop = min(voc + 1.0, V_STOP)
-print(f"Adjusted sweep stop voltage = {adjusted_v_stop:.2f} V")
-
-# ==== HELPER FUNCTION: Smooth resistance ramping ====
-def ramp_resistance(current_res, target_res, step=0.05, delay=0.1):
-    steps = int(abs(target_res - current_res) / step)
-    direction = 1 if target_res > current_res else -1
-    for i in range(steps):
-        intermediate_res = current_res + direction * (i + 1) * step
-        inst.write(f":RES {intermediate_res:.3f}")
-        time.sleep(delay)
+# ==== VERIFY COMMUNICATION ====
+print("🆔 Instrument ID:", inst.query("*IDN?"))
 
 # ==== LOAD SETUP ====
-inst.write(":FUNC RES")     # Constant Resistance mode
-inst.write(":INPUT ON")     # Turn on load
+inst.write(":FUNC RES")          # Set function mode to Constant Resistance (CR)
+inst.write(":INPUT ON")          # Turn on the electronic load
+inst.write(f":VOLT:LIM {V_STOP:.2f}")    # Set voltage limit
+inst.write(f":CURR:LIM {MAX_CURRENT:.2f}")  # Set current limit
 
 voltages = []
 currents = []
 powers = []
 
-print("\nStarting voltage sweep with enhanced safeguards...\n")
+try:
+    print("\n⚡ Starting sweep...")
+    for v_target in np.arange(V_START, V_STOP + V_STEP, V_STEP):
+        resistance = v_target / ESTIMATED_CURRENT if v_target > 0 else MIN_RESISTANCE
 
-start_time = time.time()
-current_resistance = 0.0  # track current resistance for ramping
+        # Clamp resistance within allowed bounds
+        if resistance < MIN_RESISTANCE:
+            resistance = MIN_RESISTANCE
+        elif resistance > MAX_RESISTANCE:
+            resistance = MAX_RESISTANCE
 
-for v_target in np.arange(V_START, adjusted_v_stop + V_STEP, V_STEP):
-    elapsed_time = time.time() - start_time
-    if elapsed_time > MAX_SWEEP_TIME:
-        print(f"⚠️ WARNING: Max sweep time of {MAX_SWEEP_TIME}s exceeded, stopping sweep.")
-        break
+        # Select the proper resistance range mode
+        if LOW_RANGE_MIN <= resistance <= LOW_RANGE_MAX:
+            inst.write(":RANGE LOW")
+        elif HIGH_RANGE_MIN <= resistance <= HIGH_RANGE_MAX:
+            inst.write(":RANGE HIGH")
+        else:
+            print(f"⚠️ Resistance {resistance:.3f} Ω out of range, skipping step.")
+            continue
 
-    print(f"Setting target voltage: {v_target:.2f} V")
+        # Set resistance
+        inst.write(f":RES {resistance:.3f}")
 
-    if v_target == 0:
-        target_resistance = 0.01  # avoid division by zero
-    else:
-        target_resistance = v_target / ESTIMATED_CURRENT
+        time.sleep(DWELL_TIME)
 
-    # Ramp resistance smoothly
-    ramp_resistance(current_resistance, target_resistance)
-    current_resistance = target_resistance
-
-    time.sleep(DWELL_TIME)
-
-    try:
         voltage = float(inst.query(":MEAS:VOLT?"))
         current = float(inst.query(":MEAS:CURR?"))
-    except pyvisa.VisaIOError as e:
-        print(f"Communication error: {e}")
-        inst.write(":INPUT OFF")
-        sys.exit(1)
+        power = voltage * current
 
-    power = voltage * current
+        print(f"📍 V={voltage:.2f} V | I={current:.2f} A | P={power:.2f} W")
 
-    print(f"Measured V={voltage:.3f} V | I={current:.3f} A | P={power:.3f} W")
+        if current > MAX_CURRENT:
+            print(f"🚨 Current limit exceeded! ({current:.2f} A > {MAX_CURRENT} A). Stopping sweep.")
+            break
 
-    # Safeguards
-    if current > MAX_CURRENT:
-        print(f"⚠️ WARNING: Current {current:.3f} A exceeded max limit of {MAX_CURRENT} A")
-        print("Stopping sweep to protect solar cell and load.")
-        break
+        if power > MAX_POWER:
+            print(f"🚨 Power limit exceeded! ({power:.2f} W > {MAX_POWER} W). Stopping sweep.")
+            break
 
-    if power > MAX_POWER:
-        print(f"⚠️ WARNING: Power {power:.2f} W exceeded max limit of {MAX_POWER} W")
-        print("Stopping sweep to protect the load.")
-        break
+        voltages.append(voltage)
+        currents.append(current)
+        powers.append(power)
 
-    voltages.append(voltage)
-    currents.append(current)
-    powers.append(power)
+except KeyboardInterrupt:
+    print("\n⛔ Sweep manually interrupted.")
 
-print("\nTurning off load input...")
-inst.write(":INPUT OFF")
+finally:
+    inst.write(":INPUT OFF")
+    print("\n🛑 Load disabled. Sweep complete or aborted.")
 
-# ==== POST SWEEP ANALYSIS ====
-voltages = np.array(voltages)
-currents = np.array(currents)
-powers = np.array(powers)
+# ==== ANALYSIS ====
+if voltages:
+    voltages = np.array(voltages)
+    currents = np.array(currents)
+    powers = np.array(powers)
 
-if len(powers) == 0:
-    print("No data collected! Exiting.")
-    sys.exit(1)
+    max_idx = np.argmax(powers)
+    v_mpp = voltages[max_idx]
+    i_mpp = currents[max_idx]
+    p_mpp = powers[max_idx]
 
-max_idx = np.argmax(powers)
-v_mpp = voltages[max_idx]
-i_mpp = currents[max_idx]
-p_mpp = powers[max_idx]
+    print(f"\n✅ Maximum Power Point (MPP): {p_mpp:.2f} W at {v_mpp:.2f} V, {i_mpp:.2f} A")
 
-print(f"\n==> Maximum Power Point (MPP): {p_mpp:.2f} W at {v_mpp:.2f} V, {i_mpp:.2f} A")
+    # ==== ASK TO SAVE CSV WITH FILE DIALOG ====
+    save_input = input("\n💾 Would you like to save the I-V/P-V data to CSV? (y/n): ").strip().lower()
+    if save_input == 'y':
+        # Tkinter file save dialog
+        root = tk.Tk()
+        root.withdraw()  # Hide main window
+        default_filename = f"iv_pv_data_{timestamp}.csv"
+        file_path = filedialog.asksaveasfilename(
+            title="Save CSV file",
+            initialfile=default_filename,
+            defaultextension=".csv",
+            filetypes=[("CSV files", "*.csv"), ("All files", "*.*")]
+        )
+        if file_path:
+            with open(file_path, 'w', newline='') as f:
+                writer = csv.writer(f)
+                writer.writerow(["Voltage (V)", "Current (A)", "Power (W)"])
+                writer.writerows(zip(voltages, currents, powers))
+            print(f"📁 Data saved to {file_path}")
+        else:
+            print("❌ Save cancelled. CSV not saved.")
+    else:
+        print("❌ CSV not saved.")
 
-# ==== PROMPT TO SAVE CSV ====
-save_input = input("\nSave I-V/P-V data to CSV? (y/n): ").strip().lower()
+    # ==== PLOTTING ====
+    plt.figure(figsize=(12, 6))
 
-if save_input == 'y':
-    with open(CSV_FILENAME, 'w', newline='') as f:
-        writer = csv.writer(f)
-        writer.writerow(["Voltage (V)", "Current (A)", "Power (W)"])
-        writer.writerows(zip(voltages, currents, powers))
-    print(f"✅ Data saved to {CSV_FILENAME}")
+    plt.subplot(1, 2, 1)
+    plt.plot(voltages, currents, 'b.-')
+    plt.title(f'I-V Curve ({timestamp})')
+    plt.xlabel('Voltage (V)')
+    plt.ylabel('Current (A)')
+    plt.grid(True)
+
+    plt.subplot(1, 2, 2)
+    plt.plot(voltages, powers, 'r.-')
+    plt.plot(v_mpp, p_mpp, 'ko', label=f'MPP: {p_mpp:.2f}W @ {v_mpp:.2f}V')
+    plt.title(f'P-V Curve ({timestamp})')
+    plt.xlabel('Voltage (V)')
+    plt.ylabel('Power (W)')
+    plt.legend()
+    plt.grid(True)
+
+    plt.tight_layout()
+    plt.show()
+
 else:
-    print("❌ Data not saved.")
-
-# ==== PLOT RESULTS ====
-print("Plotting I-V and P-V curves...")
-plt.figure(figsize=(12, 6))
-
-plt.subplot(1, 2, 1)
-plt.plot(voltages, currents, 'b.-')
-plt.title('I-V Curve')
-plt.xlabel('Voltage (V)')
-plt.ylabel('Current (A)')
-plt.grid(True)
-
-plt.subplot(1, 2, 2)
-plt.plot(voltages, powers, 'r.-')
-plt.plot(v_mpp, p_mpp, 'ko', label=f'MPP: {p_mpp:.2f} W @ {v_mpp:.2f} V')
-plt.title('P-V Curve')
-plt.xlabel('Voltage (V)')
-plt.ylabel('Power (W)')
-plt.legend()
-plt.grid(True)
-
-plt.tight_layout()
-plt.show()
-
-print("Script finished.")
+    print("⚠️ No data collected. Check sweep limits and setup.")
