@@ -8,7 +8,7 @@ import tkinter as tk
 from tkinter import filedialog
 
 # ==== CONFIGURATION ====
-V_START = 0.5           # Start voltage (V)
+V_START = 0.0         # Start voltage (V)
 V_STOP = 10.0           # Max sweep voltage (V)
 V_STEP = 0.1            # Voltage step size (V)
 DWELL_TIME = 0.3        # Wait time per step (seconds)
@@ -70,14 +70,7 @@ try:
         elif resistance > MAX_RESISTANCE:
             resistance = MAX_RESISTANCE
 
-        # Select the proper resistance range mode
-        if LOW_RANGE_MIN <= resistance <= LOW_RANGE_MAX:
-            inst.write(":RANGE LOW")
-        elif HIGH_RANGE_MIN <= resistance <= HIGH_RANGE_MAX:
-            inst.write(":RANGE HIGH")
-        else:
-            print(f"⚠️ Resistance {resistance:.3f} Ω out of range, skipping step.")
-            continue
+        inst.write(":RANGE LOW")
 
         # Set resistance
         inst.write(f":RES {resistance:.3f}")
