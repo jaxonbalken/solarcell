@@ -8,28 +8,19 @@ import tkinter as tk
 from tkinter import filedialog
 
 # ==== CONFIGURATION ====
-V_START = 0.0         # Start voltage (V)
+V_START = 0.0           # Start voltage (V)
 V_STOP = 10.0           # Max sweep voltage (V)
 V_STEP = 0.1            # Voltage step size (V)
 DWELL_TIME = 0.3        # Wait time per step (seconds)
-ESTIMATED_CURRENT = 5.0 # Estimated max current (A)
 
 # === SAFETY LIMITS ===
 MAX_CURRENT = 20.0       # Max current limit (A)
-MAX_POWER = 50.0        # Max power limit (W)
-MIN_RESISTANCE = 0.08   # Ohms, minimum resistance command
-MAX_RESISTANCE = 15000  # Ohms, maximum resistance command (15 kΩ)
-
-# === RESISTANCE RANGE LIMITS (from Rigol manual) ===
-LOW_RANGE_MIN = 0.08    # Ohms
-LOW_RANGE_MAX = 15.0    # Ohms
-HIGH_RANGE_MIN = 2.0    # Ohms
-HIGH_RANGE_MAX = 15000  # Ohms (15 kΩ)
+MAX_POWER = 50.0         # Max power limit (W)
 
 # === FILE NAMING ===
 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
-print("=== Starting Rigol DL3031 IV/PV sweep script with enhanced safeguards ===")
+print("=== Starting Rigol DL3031 IV/PV CV-mode sweep ===")
 
 # ==== VISA SETUP ====
 rm = pyvisa.ResourceManager('/Library/Frameworks/VISA.framework/VISA')
@@ -49,9 +40,9 @@ inst.read_termination = '\n'
 # ==== VERIFY COMMUNICATION ====
 print("🆔 Instrument ID:", inst.query("*IDN?"))
 
-# ==== LOAD SETUP ====
-inst.write(":FUNC RES")          # Set function mode to Constant Resistance (CR)
-inst.write(":INPUT ON")          # Turn on the electronic load
+# ==== LOAD SETUP FOR CV MODE ====
+inst.write(":FUNC VOLT")                 # Set function mode to Constant Voltage (CV)
+inst.write(":INPUT ON")                  # Turn on the electronic load
 inst.write(f":VOLT:LIM {V_STOP:.2f}")    # Set voltage limit
 inst.write(f":CURR:LIM {MAX_CURRENT:.2f}")  # Set current limit
 
@@ -60,21 +51,9 @@ currents = []
 powers = []
 
 try:
-    print("\n⚡ Starting sweep...")
+    print("\n⚡ Starting CV voltage sweep...")
     for v_target in np.arange(V_START, V_STOP + V_STEP, V_STEP):
-        resistance = v_target / ESTIMATED_CURRENT if v_target > 0 else MIN_RESISTANCE
-
-        # Clamp resistance within allowed bounds
-        if resistance < MIN_RESISTANCE:
-            resistance = MIN_RESISTANCE
-        elif resistance > MAX_RESISTANCE:
-            resistance = MAX_RESISTANCE
-
-        inst.write(":RANGE LOW")
-
-        # Set resistance
-        inst.write(f":RES {resistance:.3f}")
-
+        inst.write(f":VOLT {v_target:.2f}")  # Set target voltage
         time.sleep(DWELL_TIME)
 
         voltage = float(inst.query(":MEAS:VOLT?"))
@@ -163,3 +142,4 @@ if voltages:
 
 else:
     print("⚠️ No data collected. Check sweep limits and setup.")
+
