@@ -9,9 +9,9 @@ from tkinter import filedialog
 
 # ==== CONFIGURATION ====
 V_START = 0.0           # Start voltage (V)
-V_STOP = 10.0           # Max sweep voltage (V)
-V_STEP = 0.1            # Voltage step size (V)
-DWELL_TIME = 0.3        # Wait time per step (seconds)
+V_STOP = 1           # Max sweep voltage (V)
+V_STEP = 0.01            # Voltage step size (V)
+DWELL_TIME = 0.5        # Wait time per step (seconds)
 
 # === SAFETY LIMITS ===
 MAX_CURRENT = 20.0       # Max current limit (A)
